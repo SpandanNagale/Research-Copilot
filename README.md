@@ -18,7 +18,7 @@ Built with **Streamlit, FAISS, and Local Embeddings**, it’s designed as a modu
 Clone the repo and set up a Python virtual environment:
 
 ```bash
-git clone 
+git clone https://github.com/SpandanNagale/Research-Copilot
 cd research-copilot
 
 # Create venv
@@ -28,3 +28,4 @@ source .venv/bin/activate  # Linux/Mac
 
 # Install dependencies
 pip install -r requirements.txt
+
