@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 def get_llm(prompt: str, system: str = "You are a precise research assistant.")->str:
     client=Groq(api_key=os.getenv("GROQ_API_KEY"),)
-    model="llama3-8b-8192"
+    model="llama-3.1-8b-instant"
     resp=client.chat.completions.create(
          model=model,
          messages=[{"role":"user","content":system},{"role":"user","content":prompt}],
@@ -21,4 +21,5 @@ def call_llm(prompt: str) -> str:
     ctx = re.split(r"Context:\s*", prompt, flags=re.IGNORECASE)
     text = ctx[-1] if len(ctx) > 1 else prompt
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+
     return "No LLM key set. Fallback extractive answer:\n\n" + " ".join(sentences[:8])
