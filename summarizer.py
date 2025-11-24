@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OPENROUTER_URL = "https://api.openrouter.ai/v1/chat/completions"
-MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/r1:free")
+MODEL = os.getenv("OPENROUTER_MODEL", "x-ai/grok-4.1-fast:free")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 # Optional fallback HF Space (e.g. https://USERNAME-SPACE.hf.space/api/predict/)
 HF_SPACE_URL = os.getenv("HF_SPACE_URL")
@@ -115,3 +115,4 @@ def _call_hf_space_summary(text: str) -> str:
 
 def batch_summary(abstracts: list[str]) -> list[str]:
     return [summary(t) for t in abstracts]
+
