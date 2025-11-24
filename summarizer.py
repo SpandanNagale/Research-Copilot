@@ -8,7 +8,7 @@ load_dotenv()
 OPENROUTER_URL = "https://api.openrouter.ai/v1/chat/completions"
 
 # Default free model — change via .env if you want
-MODEL = os.getenv("OPENROUTER_MODEL", "x-ai/grok-4.1-fast:free")
+MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/r1:free")
 
 def summary(text: str) -> str:
     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -51,3 +51,4 @@ def summary(text: str) -> str:
 
 def batch_summary(abstracts: list[str]) -> list[str]:
     return [summary(t) for t in abstracts]
+
