@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OPENROUTER_URL = "https://api.openrouter.ai/v1/chat/completions"
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/r1:free")
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "x-ai/grok-4.1-fast:free")
 
 def get_llm(prompt: str, system: str = "You are a precise research assistant.") -> str:
     """
@@ -66,4 +66,5 @@ def call_llm(prompt: str) -> str:
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
 
     return "No LLM key set. Fallback extractive answer:\n\n" + " ".join(sentences[:8])
+
 
