@@ -1,70 +1,63 @@
-# llm_client.py  (replace your old Groq LLM file with this)
-
 import os
 import re
-import requests
+import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
 
-OPENROUTER_URL = "https://api.openrouter.ai/v1/chat/completions"
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "x-ai/grok-4.1-fast:free")
+# Default to Flash for speed/cost efficiency in RAG loops
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-def get_llm(prompt: str, system: str = "You are a precise research assistant.") -> str:
+def get_llm(prompt: str, system_instruction: str = "You are a precise research assistant.") -> str:
     """
-    Call OpenRouter chat completions and return the assistant text.
-    Works as a drop-in replacement for the previous Groq version.
+    Call Google Gemini API and return the assistant text.
     """
-
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY missing. call_llm() will fallback.")
-
-    model = os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.2,
-        "max_tokens": 800
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    resp = requests.post(OPENROUTER_URL, json=payload, headers=headers, timeout=30)
+        raise RuntimeError("GEMINI_API_KEY missing. call_llm() will fallback.")
 
     try:
-        resp.raise_for_status()
-    except requests.HTTPError as e:
-        raise RuntimeError(f"OpenRouter error {resp.status_code}: {resp.text}") from e
+        genai.configure(api_key=api_key)
+        
+        # System instructions are supported in newer Gemini models
+        model = genai.GenerativeModel(
+            model_name=DEFAULT_MODEL,
+            system_instruction=system_instruction
+        )
 
-    data = resp.json()
+        generation_config = genai.types.GenerationConfig(
+            candidate_count=1,
+            max_output_tokens=800,
+            temperature=0.2,
+        )
 
-    try:
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception:
-        raise RuntimeError(f"Unexpected OpenRouter response format: {data}")
+        response = model.generate_content(
+            prompt,
+            generation_config=generation_config
+        )
+
+        # Check for safety blocks or empty responses
+        if not response.text:
+             raise RuntimeError(f"Gemini returned empty response. Finish reason: {response.candidates[0].finish_reason}")
+             
+        return response.text.strip()
+
+    except Exception as e:
+        # Catch SDK specific errors or network issues
+        raise RuntimeError(f"Gemini API Error: {str(e)}") from e
 
 
 def call_llm(prompt: str) -> str:
     """
-    If OPENROUTER_API_KEY is present → OpenRouter.
-    Otherwise → your fallback extractive answer.
+    If GEMINI_API_KEY is present -> Google Gemini.
+    Otherwise -> Fallback extractive answer.
     """
-    if os.getenv("OPENROUTER_API_KEY"):
+    if os.getenv("GEMINI_API_KEY"):
         return get_llm(prompt)
 
-    # Fallback (unchanged from previous Groq version)
+    # Fallback (Extracts text from prompt if no key provided)
     ctx = re.split(r"Context:\s*", prompt, flags=re.IGNORECASE)
     text = ctx[-1] if len(ctx) > 1 else prompt
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
 
-    return "No LLM key set. Fallback extractive answer:\n\n" + " ".join(sentences[:8])
-
-
+    return "No GEMINI_API_KEY set. Fallback extractive answer:\n\n" + " ".join(sentences[:8])
