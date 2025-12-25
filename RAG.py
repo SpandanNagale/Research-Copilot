@@ -6,7 +6,7 @@ import requests
 from typing import List, Tuple, Dict
 
 # Importing from your modified llm_client
-from llm_client import call_llm 
+from llm import call_llm 
 # Assuming vectorstore exists in your project structure
 from vectorstore import vector_store 
 
@@ -129,3 +129,4 @@ def RAG_ans(vector_store, question: str, k: int = 4, max_retries: int = 3, backo
     note = ("\n\n[NOTE] Gemini LLM call failed after retries; used extractive fallback. "
             f"Error summary: {str(last_exc).splitlines()[0] if last_exc else 'unknown'}")
     return fallback + note, hits
+
