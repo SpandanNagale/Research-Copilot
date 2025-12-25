@@ -1,16 +1,16 @@
-# resilient_rag_llm_first.py
 import os
 import re
 import time
 import traceback
-import socket
 import requests
 from typing import List, Tuple, Dict
 
-from llm import call_llm  # your OpenRouter wrapper (may raise exceptions on network errors)
-from vectorstore import vector_store
+# Importing from your modified llm_client
+from llm_client import call_llm 
+# Assuming vectorstore exists in your project structure
+from vectorstore import vector_store 
 
-PROMPT_TMPL = """You are a research assistant. Answer the user's question using ONLY the provided paper abstracts.
+PROMPT_TMPL = """Answer the user's question using ONLY the provided paper abstracts.
 Cite sources inline as [1], [2], ... corresponding to the bracketed sources in Context.
 Be concise, factual, and avoid speculation. If the answer is uncertain, say so and point to the most relevant sources.
 
@@ -74,51 +74,45 @@ def _call_hf_space(question: str, context_text: str) -> str:
 
 def RAG_ans(vector_store, question: str, k: int = 4, max_retries: int = 3, backoff_base: float = 1.0):
     """
-    LLM-first RAG:
+    LLM-first RAG (Gemini Edition):
     - Retrieve hits
     - Try call_llm(prompt) with retries on network/transient errors
     - If call succeeds -> return LLM answer + hits
-    - If call definitively fails after retries -> try HF fallback if configured, otherwise return extractive fallback
+    - If call definitively fails -> try HF fallback -> extractive fallback
     """
     hits = vector_store.search(question, k)
     context = format_context(hits)
     prompt = PROMPT_TMPL.format(question=question, context=context)
 
-    openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    if not openrouter_key:
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_key:
         # No key: behave as before but explicit
         fallback = _extractive_rag_answer(hits, question, max_sentences=5)
-        return fallback + "\n\n[NOTE] No OPENROUTER_API_KEY configured; used extractive fallback.", hits
+        return fallback + "\n\n[NOTE] No GEMINI_API_KEY configured; used extractive fallback.", hits
 
     last_exc = None
     for attempt in range(1, max_retries + 1):
         try:
-            # Attempt the LLM call (this should return text or raise)
+            # Attempt the LLM call
             answer = call_llm(prompt)
-            # If call_llm returns something that looks like an error, keep trying (defensive)
-            if not answer or answer.lower().startswith("openrouter error") or "fallback" in answer.lower():
-                # treat as failure and retry
+            
+            # Defensive check for error messages in the text response itself
+            if not answer or "gemini error" in answer.lower() or "fallback" in answer.lower():
                 raise RuntimeError(f"LLM returned empty/error-like response: {answer}")
+            
             return answer, hits
+            
         except Exception as e:
             last_exc = e
-            # Print full trace to logs so you can fix DNS/credential issues quickly
             traceback.print_exc()
-            # If this is a DNS/NameResolution error, we may want to bail early or continue retrying
-            is_name_error = False
-            err_str = repr(e).lower()
-            # common patterns
-            if "name or service not known" in err_str or "gaierror" in err_str or "failed to resolve" in err_str:
-                is_name_error = True
-
-            # If name resolution error, wait and retry a couple times; sometimes transient in containers
+            
+            # Retry logic
             if attempt < max_retries:
                 sleep_time = backoff_base * (2 ** (attempt - 1))
-                print(f"[RAG] LLM call failed (attempt {attempt}/{max_retries}), retrying in {sleep_time:.1f}s...")
+                print(f"[RAG] Gemini call failed (attempt {attempt}/{max_retries}), retrying in {sleep_time:.1f}s...")
                 time.sleep(sleep_time)
                 continue
             else:
-                # exhausted retries
                 break
 
     # At this point LLM failed after retries.
@@ -132,6 +126,6 @@ def RAG_ans(vector_store, question: str, k: int = 4, max_retries: int = 3, backo
 
     # Final: deterministic extractive fallback
     fallback = _extractive_rag_answer(hits, question, max_sentences=5)
-    note = ("\n\n[NOTE] Upstream LLM call failed after retries; used extractive fallback. "
+    note = ("\n\n[NOTE] Gemini LLM call failed after retries; used extractive fallback. "
             f"Error summary: {str(last_exc).splitlines()[0] if last_exc else 'unknown'}")
     return fallback + note, hits
