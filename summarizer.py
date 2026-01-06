@@ -1,118 +1,71 @@
-# robust_summary_llm.py
-import os
-import re
-import socket
-import time
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from dotenv import load_dotenv
+import asyncio
+import logging
+from typing import List, Dict, Any
 
-load_dotenv()
+# Import the unified LLM router
+from llm import get_llm_async
 
-OPENROUTER_URL = "https://api.openrouter.ai/v1/chat/completions"
-MODEL = os.getenv("OPENROUTER_MODEL", "x-ai/grok-4.1-fast:free")
-OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
-# Optional fallback HF Space (e.g. https://USERNAME-SPACE.hf.space/api/predict/)
-HF_SPACE_URL = os.getenv("HF_SPACE_URL")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("Summarizer_Engine")
 
-def _can_resolve(hostname: str) -> bool:
+# --- PROMPT TEMPLATE ---
+# Forces the model to be concise and consistent.
+SUMMARY_PROMPT = """You are an expert academic synthesizer. 
+Summarize the following abstract into exactly three structured sections.
+Do not use conversational filler or introductory text.
+
+Abstract:
+{text}
+
+Output format:
+**Problem:** [1 sentence on the research gap]
+**Method:** [1-2 sentences on the specific model/dataset/algorithm used]
+**Result:** [1 sentence on the key metric or finding]
+"""
+
+async def summarize_async(text: str, config: Dict[str, Any]) -> str:
+    """
+    Summarizes a single abstract using the configured LLM (Gemini or Ollama).
+    """
+    # 1. Validation
+    if not text or len(text) < 50:
+        return "Abstract too short or missing."
+
+    # 2. Construction
+    prompt = SUMMARY_PROMPT.format(text=text)
+
+    # 3. Execution
     try:
-        socket.gethostbyname(hostname)
-        return True
-    except Exception:
-        return False
-
-def _requests_session_with_retries(total_retries: int = 3, backoff_factor: float = 0.5):
-    session = requests.Session()
-    retries = Retry(
-        total=total_retries,
-        backoff_factor=backoff_factor,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("POST", "GET"),
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
-
-def _extractive_summary(text: str, num_sentences: int = 3) -> str:
-    # cheap fallback: first N sentences from the "Text:" or full text
-    parts = re.split(r"Text:\s*", text, flags=re.IGNORECASE)
-    src = parts[-1].strip() if parts else text
-    sents = re.split(r"(?<=[.!?])\s+", src)
-    return "Fallback extractive summary:\n\n" + " ".join(sents[:max(num_sentences, 1)])
-
-def summary(text: str) -> str:
-    # If no API key, immediately fallback
-    if not OPENROUTER_KEY:
-        return _extractive_summary(text, num_sentences=3)
-
-    # DNS check
-    if not _can_resolve("api.openrouter.ai"):
-        # try HF Space fallback if configured
-        if HF_SPACE_URL:
-            try:
-                return _call_hf_space_summary(text)
-            except Exception:
-                return "Network/DNS error: cannot resolve api.openrouter.ai and HF fallback failed.\n\n" + _extractive_summary(text, 3)
-        return "Network/DNS error: cannot resolve api.openrouter.ai. " + _extractive_summary(text, 3)
-
-    # Prepare payload
-    prompt = (
-        "Summarize this academic abstract in 3 bullet points. "
-        "Preserve key methods, datasets, and results.\n\n"
-        f"Text:\n{text}"
-    )
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": "You are a precise academic summarizer."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.2,
-        "max_tokens": 300
-    }
-    headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
-
-    session = _requests_session_with_retries(total_retries=3, backoff_factor=1.0)
-    try:
-        resp = session.post(OPENROUTER_URL, json=payload, headers=headers, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
+        # We pass the 'config' (provider, api_key, model) down to the LLM router
+        summary = await get_llm_async(prompt, config)
+        return summary
+        
     except Exception as e:
-        # Try HF space fallback if configured
-        if HF_SPACE_URL:
-            try:
-                return _call_hf_space_summary(text)
-            except Exception:
-                # fall through to extractive
-                pass
-        # final fallback
-        return f"OpenRouter request failed: {str(e)}\n\n" + _extractive_summary(text, 3)
+        logger.error(f"Summary failed for text snippet: {text[:30]}... Error: {e}")
+        return "Summary unavailable due to LLM error."
 
-def _call_hf_space_summary(text: str) -> str:
+async def batch_summary_async(abstracts: List[str], config: Dict[str, Any]) -> List[str]:
     """
-    Optional: call a Hugging Face Space / custom endpoint that you host as fallback.
-    The HF Space should accept JSON payload { "data": [text] } and return predictions.
-    Configure HF_SPACE_URL in env if you have one.
+    Summarizes multiple abstracts IN PARALLEL.
+    
+    Args:
+        abstracts: List of abstract strings.
+        config: Dict containing {"provider": "...", "api_key": "...", "model": "..."}.
+        
+    Returns:
+        List of summary strings in the same order as input.
     """
-    if not HF_SPACE_URL:
-        raise RuntimeError("HF_SPACE_URL not configured")
-    session = _requests_session_with_retries()
-    payload = {"data": [text]}
-    resp = session.post(HF_SPACE_URL, json=payload, timeout=20)
-    resp.raise_for_status()
-    j = resp.json()
-    # Adapt depending on your Space's output format — common is j["data"][0] or j["predictions"][0]
-    if "data" in j and isinstance(j["data"], list):
-        return j["data"][0]
-    if "predictions" in j and isinstance(j["predictions"], list):
-        return j["predictions"][0]
-    # fallback raw
-    return str(j)
+    # Create a list of async tasks
+    tasks = [summarize_async(text, config) for text in abstracts]
+    
+    # asyncio.gather runs them all simultaneously
+    # If using Gemini, 20 papers take ~3-4 seconds total.
+    results = await asyncio.gather(*tasks)
+    
+    return results
 
-def batch_summary(abstracts: list[str]) -> list[str]:
-    return [summary(t) for t in abstracts]
-
+# --- SYNC WRAPPER ---
+# Use this only if you are calling from a legacy synchronous script.
+def batch_summary(abstracts: List[str], config: Dict[str, Any]) -> List[str]:
+    return asyncio.run(batch_summary_async(abstracts, config))

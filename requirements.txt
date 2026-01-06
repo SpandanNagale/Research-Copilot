@@ -11,3 +11,25 @@ faiss-cpu
 numpy
 groq
 google-generativeai
+# --- Core UI & Data ---
+streamlit
+pandas
+numpy
+arxiv
+
+# --- AI & LLM (Gemini) ---
+google-generativeai>=0.5.0
+python-dotenv
+tenacity
+
+# --- RAG & Embeddings ---
+sentence-transformers
+faiss-cpu
+scikit-learn
+
+# --- Legacy/VectorStore Support ---
+# Keep these ONLY if your 'vectorstore.py' relies on LangChain wrappers. 
+# If you wrote a custom FAISS implementation, delete these.
+langchain-community
+langchain-huggingface
+ollama

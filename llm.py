@@ -1,63 +1,72 @@
 import os
-import re
+import asyncio
+import logging
 import google.generativeai as genai
-from dotenv import load_dotenv
+import ollama
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-load_dotenv()
+# Logger setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("LLM_Engine")
 
-# Default to Flash for speed/cost efficiency in RAG loops
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-
-def get_llm(prompt: str, system_instruction: str = "You are a precise research assistant.") -> str:
-    """
-    Call Google Gemini API and return the assistant text.
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY missing. call_llm() will fallback.")
-
-    try:
-        genai.configure(api_key=api_key)
-        
-        # System instructions are supported in newer Gemini models
-        model = genai.GenerativeModel(
-            model_name=DEFAULT_MODEL,
-            system_instruction=system_instruction
-        )
-
-        generation_config = genai.types.GenerationConfig(
+# --- 1. GEMINI BACKEND ---
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+async def _call_gemini(prompt: str, api_key: str, model_name: str = "gemini-1.5-flash") -> str:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction="You are a precise research assistant. Be factual and cite sources."
+    )
+    
+    response = await model.generate_content_async(
+        prompt,
+        generation_config=genai.types.GenerationConfig(
             candidate_count=1,
-            max_output_tokens=800,
-            temperature=0.2,
+            max_output_tokens=8192,
+            temperature=0.3
         )
+    )
+    return response.text.strip()
 
-        response = model.generate_content(
-            prompt,
-            generation_config=generation_config
+# --- 2. OLLAMA BACKEND (LOCAL) ---
+async def _call_ollama(prompt: str, model_name: str = "gemma3") -> str:
+    """
+    Calls local Ollama instance. Requires 'ollama serve' running.
+    """
+    try:
+        # Ollama python client is sync, so we wrap it in a thread to keep UI responsive
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, 
+            lambda: ollama.chat(model=model_name, messages=[
+                {'role': 'system', 'content': 'You are a precise research assistant.'},
+                {'role': 'user', 'content': prompt},
+            ])
         )
-
-        # Check for safety blocks or empty responses
-        if not response.text:
-             raise RuntimeError(f"Gemini returned empty response. Finish reason: {response.candidates[0].finish_reason}")
-             
-        return response.text.strip()
-
+        return response['message']['content']
     except Exception as e:
-        # Catch SDK specific errors or network issues
-        raise RuntimeError(f"Gemini API Error: {str(e)}") from e
+        logger.error(f"Ollama Error: {e}")
+        return f"Error connecting to Local LLM: {str(e)}. Is Ollama running?"
 
-
-def call_llm(prompt: str) -> str:
+# --- 3. UNIFIED GATEWAY ---
+async def get_llm_async(prompt: str, config: dict) -> str:
     """
-    If GEMINI_API_KEY is present -> Google Gemini.
-    Otherwise -> Fallback extractive answer.
+    Router that sends the prompt to the correct backend.
+    
+    config = {
+        "provider": "gemini" | "ollama",
+        "api_key": "...", (if gemini)
+        "model": "gemini-1.5-flash" | "llama3" | "deepseek-r1"
+    }
     """
-    if os.getenv("GEMINI_API_KEY"):
-        return get_llm(prompt)
-
-    # Fallback (Extracts text from prompt if no key provided)
-    ctx = re.split(r"Context:\s*", prompt, flags=re.IGNORECASE)
-    text = ctx[-1] if len(ctx) > 1 else prompt
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-
-    return "No GEMINI_API_KEY set. Fallback extractive answer:\n\n" + " ".join(sentences[:8])
+    provider = config.get("provider", "gemini")
+    
+    if provider == "gemini":
+        if not config.get("api_key"):
+            return "Error: Gemini selected but no API Key provided."
+        return await _call_gemini(prompt, config["api_key"], config.get("model", "gemini-1.5-flash"))
+        
+    elif provider == "ollama":
+        return await _call_ollama(prompt, config.get("model", "mistral"))
+        
+    return "Error: Unknown LLM provider."

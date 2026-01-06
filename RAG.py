@@ -1,132 +1,112 @@
-import os
-import re
-import time
-import traceback
-import requests
-from typing import List, Tuple, Dict
+import logging
+import asyncio
+from typing import List, Tuple, Dict, Any
 
-# Importing from your modified llm_client
-from llm import call_llm 
-# Assuming vectorstore exists in your project structure
-from vectorstore import vector_store 
+# Import the unified LLM router we built
+from llm import get_llm_async
 
-PROMPT_TMPL = """Answer the user's question using ONLY the provided paper abstracts.
-Cite sources inline as [1], [2], ... corresponding to the bracketed sources in Context.
-Be concise, factual, and avoid speculation. If the answer is uncertain, say so and point to the most relevant sources.
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("RAG_Engine")
 
-Question:
-{question}
+# --- PROMPT TEMPLATE ---
+# We use XML tags because models (both Gemini and Llama 3) follow these boundaries 
+# better than plain text, preventing "citation hallucination".
+PROMPT_TMPL = """You are a rigorous Research Copilot.
+Answer the user's question using ONLY the provided academic abstracts below.
 
-Context:
+<instructions>
+1. Cite sources strictly using the format [1], [2] attached to the statements they support.
+2. If the abstracts contain conflicting results, mention both.
+3. If the answer is not in the abstracts, state "Insufficient information in the provided sources."
+4. Do not hallucinate external knowledge.
+5. Keep the answer concise and professional.
+</instructions>
+
+<sources>
 {context}
-"""
+</sources>
 
-HF_SPACE_URL = os.getenv("HF_SPACE_URL")  # optional HF fallback
+Question: {question}
+Answer:"""
 
-def format_context(snippet: List[Tuple[Dict, float, int]]) -> str:
+def format_context_structured(hits: List[Tuple[Dict, float, int]]) -> str:
+    """
+    Formats retrieval hits into clear XML blocks for the LLM.
+    """
     blocks = []
-    for i, (p, score, idx) in enumerate(snippet, start=1):
-        title = p.get("title", "Untitled")
-        url = p.get("pdf_url") or p.get("entry_id") or "N/A"
-        abstract = p.get("summary") or p.get("abstract") or ""
-        blocks.append(f"[{i}] Title: {title}\nURL: {url}\nScore: {score:.3f}\nAbstract: {abstract}")
-    return "\n\n".join(blocks)
-
-def _extractive_rag_answer(hits: List[Tuple[Dict, float, int]], question: str, max_sentences: int = 5) -> str:
-    question_words = set(re.findall(r"\w+", question.lower()))
-    candidates = []
     for i, (p, score, idx) in enumerate(hits, start=1):
-        text = (p.get("summary") or p.get("abstract") or "").strip()
-        if not text:
-            continue
-        sents = re.split(r"(?<=[.!?])\s+", text)
-        for sent in sents:
-            words = set(re.findall(r"\w+", sent.lower()))
-            overlap = len(words & question_words)
-            candidates.append((overlap, i, sent.strip()))
-    candidates.sort(key=lambda x: (-x[0], x[1]))
-    top_sents = [c[2] for c in candidates[:max_sentences]]
-    if not top_sents:
-        all_text = " ".join([(p.get("summary") or p.get("abstract") or "") for (p,_,_) in hits])
-        sents = re.split(r"(?<=[.!?])\s+", all_text)
-        top_sents = sents[:max_sentences]
-    answer = "Fallback (no LLM) — extractive answer based on retrieved abstracts:\n\n"
-    answer += " ".join([s.strip() for s in top_sents if s])
-    cited_indices = sorted({i for (_, i, _) in candidates[:max_sentences]})
-    if cited_indices:
-        answer += "\n\nSources: " + ", ".join(f"[{idx}]" for idx in cited_indices)
-    return answer
+        # Graceful handling of missing metadata
+        title = p.get("title", "Unknown Title")
+        url = p.get("pdf_url") or p.get("entry_id") or "N/A"
+        
+        # Priority: Summary -> Abstract -> Raw Text
+        content = p.get("summary") or p.get("abstract") or p.get("text", "")
+        # Clean up newlines to save tokens and avoid breaking XML
+        content = content.replace("\n", " ").strip()
 
-def _call_hf_space(question: str, context_text: str) -> str:
-    if not HF_SPACE_URL:
-        raise RuntimeError("HF_SPACE_URL not configured")
-    payload = {"data": [f"Question: {question}\n\nContext:\n{context_text}"]}
-    session = requests.Session()
-    resp = session.post(HF_SPACE_URL, json=payload, timeout=20)
-    resp.raise_for_status()
-    j = resp.json()
-    if isinstance(j, dict):
-        if "data" in j and isinstance(j["data"], list):
-            return j["data"][0]
-        if "predictions" in j and isinstance(j["predictions"], list):
-            return j["predictions"][0]
-    return str(j)
+        block = (
+            f'<source id="{i}">'
+            f'<title>{title}</title>'
+            f'<url>{url}</url>'
+            f'<relevance_score>{score:.3f}</relevance_score>'
+            f'<text>{content}</text>'
+            f'</source>'
+        )
+        blocks.append(block)
+    
+    return "\n".join(blocks)
 
-def RAG_ans(vector_store, question: str, k: int = 4, max_retries: int = 3, backoff_base: float = 1.0):
+async def RAG_ans_async(vector_store, question: str, config: Dict[str, Any], k: int = 5) -> Tuple[str, List[Any]]:
     """
-    LLM-first RAG (Gemini Edition):
-    - Retrieve hits
-    - Try call_llm(prompt) with retries on network/transient errors
-    - If call succeeds -> return LLM answer + hits
-    - If call definitively fails -> try HF fallback -> extractive fallback
+    Async RAG Pipeline:
+    1. Retrieve relevant chunks from VectorStore.
+    2. Format them into XML.
+    3. Send to LLM (Gemini or Ollama based on 'config').
+    
+    Args:
+        vector_store: Your FAISS/VectorStore instance.
+        question: The user's query string.
+        config: Dict containing {"provider": "...", "api_key": "...", "model": "..."}.
+        k: Number of papers to retrieve.
+        
+    Returns:
+        Tuple(Answer String, List of Source Hits)
     """
-    hits = vector_store.search(question, k)
-    context = format_context(hits)
-    prompt = PROMPT_TMPL.format(question=question, context=context)
-
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_key:
-        # No key: behave as before but explicit
-        fallback = _extractive_rag_answer(hits, question, max_sentences=5)
-        return fallback + "\n\n[NOTE] No GEMINI_API_KEY configured; used extractive fallback.", hits
-
-    last_exc = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            # Attempt the LLM call
-            answer = call_llm(prompt)
+    # 1. RETRIEVAL
+    # Most local vector stores (FAISS) are CPU-bound and synchronous.
+    # We wrap it in to_thread to prevent blocking the main event loop.
+    try:
+        loop = asyncio.get_running_loop()
+        hits = await loop.run_in_executor(None, vector_store.search, question, k)
+        
+        if not hits:
+            return "No relevant research papers found in the database to answer this question.", []
             
-            # Defensive check for error messages in the text response itself
-            if not answer or "gemini error" in answer.lower() or "fallback" in answer.lower():
-                raise RuntimeError(f"LLM returned empty/error-like response: {answer}")
-            
-            return answer, hits
-            
-        except Exception as e:
-            last_exc = e
-            traceback.print_exc()
-            
-            # Retry logic
-            if attempt < max_retries:
-                sleep_time = backoff_base * (2 ** (attempt - 1))
-                print(f"[RAG] Gemini call failed (attempt {attempt}/{max_retries}), retrying in {sleep_time:.1f}s...")
-                time.sleep(sleep_time)
-                continue
-            else:
-                break
+    except Exception as e:
+        logger.error(f"Vector Store Retrieval Failed: {e}")
+        return "Error accessing the knowledge base (Vector Store failure).", []
 
-    # At this point LLM failed after retries.
-    # Try HF fallback if configured
-    if HF_SPACE_URL:
-        try:
-            hf_ans = _call_hf_space(question, context)
-            return f"[HF_SPACE fallback used]\n\n{hf_ans}", hits
-        except Exception:
-            traceback.print_exc()
+    # 2. FORMATTING
+    context_text = format_context_structured(hits)
+    prompt = PROMPT_TMPL.format(question=question, context=context_text)
 
-    # Final: deterministic extractive fallback
-    fallback = _extractive_rag_answer(hits, question, max_sentences=5)
-    note = ("\n\n[NOTE] Gemini LLM call failed after retries; used extractive fallback. "
-            f"Error summary: {str(last_exc).splitlines()[0] if last_exc else 'unknown'}")
-    return fallback + note, hits
+    # 3. GENERATION
+    try:
+        # Pass the full config so LLM.py knows whether to use Gemini or Ollama
+        answer = await get_llm_async(prompt, config)
+        return answer, hits
+        
+    except Exception as e:
+        logger.error(f"RAG Generation Failed: {e}")
+        return (
+            f"I found relevant papers, but I'm unable to synthesize an answer due to an LLM error.\n"
+            f"Error Details: {str(e)}", 
+            hits
+        )
 
+# --- SYNC WRAPPER ---
+# Only use this if you are calling RAG from a legacy sync script.
+# In Streamlit, prefer using `asyncio.run(RAG_ans_async(...))` directly in the app.
+def RAG_ans(vector_store, question: str, config: Dict[str, Any], k: int = 5):
+    return asyncio.run(RAG_ans_async(vector_store, question, config, k))
