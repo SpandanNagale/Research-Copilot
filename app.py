@@ -42,7 +42,7 @@ with st.sidebar:
             st.success("✅ Key Detected")
             llm_config["api_key"] = final_key
             
-        llm_config["model"] = st.selectbox("Model", ["gemini-1.5-flash", "gemini-1.5-pro"])
+        llm_config["model"] = st.selectbox("Model", ["gemini-2.5-flash", "gemini-2.5-pro"])
         
     else:
         llm_config["provider"] = "ollama"
@@ -229,4 +229,5 @@ if st.session_state["papers"]:
             "research_data.csv",
             "text/csv",
             key='download-csv'
+
         )
