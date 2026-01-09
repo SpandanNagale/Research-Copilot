@@ -64,9 +64,10 @@ async def get_llm_async(prompt: str, config: dict) -> str:
     if provider == "gemini":
         if not config.get("api_key"):
             return "Error: Gemini selected but no API Key provided."
-        return await _call_gemini(prompt, config["api_key"], config.get("model", "gemini-1.5-flash"))
+        return await _call_gemini(prompt, config["api_key"], config.get("model", "gemini-2.5-flash"))
         
     elif provider == "ollama":
         return await _call_ollama(prompt, config.get("model", "mistral"))
         
+
     return "Error: Unknown LLM provider."
