@@ -11,7 +11,7 @@ logger = logging.getLogger("LLM_Engine")
 
 # --- 1. GEMINI BACKEND ---
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-async def _call_gemini(prompt: str, api_key: str, model_name: str = "gemini-1.5-flash") -> str:
+async def _call_gemini(prompt: str, api_key: str, model_name: str = "gemini-2.5-flash") -> str:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
         model_name=model_name,
@@ -71,3 +71,4 @@ async def get_llm_async(prompt: str, config: dict) -> str:
         
 
     return "Error: Unknown LLM provider."
+
