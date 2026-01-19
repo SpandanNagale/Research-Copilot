@@ -3,7 +3,7 @@ import logging
 from typing import List, Dict, Any
 
 # Import the unified LLM router
-from LLM import get_llm_async
+from llm import get_llm_async
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -76,3 +76,4 @@ async def batch_summary_async(abstracts: List[str], config: Dict[str, Any]) -> L
 # --- SYNC WRAPPER ---
 def batch_summary(abstracts: List[str], config: Dict[str, Any]) -> List[str]:
     return asyncio.run(batch_summary_async(abstracts, config))
+
