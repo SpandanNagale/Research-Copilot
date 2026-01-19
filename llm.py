@@ -56,7 +56,7 @@ async def get_llm_async(prompt: str, config: dict) -> str:
     config = {
         "provider": "gemini" | "ollama",
         "api_key": "...", (if gemini)
-        "model": "gemini-1.5-flash" | "llama3" | "deepseek-r1"
+        "model": "gemini-2.5-flash" | "llama3" | "deepseek-r1"
     }
     """
     provider = config.get("provider", "gemini")
@@ -71,4 +71,5 @@ async def get_llm_async(prompt: str, config: dict) -> str:
         
 
     return "Error: Unknown LLM provider."
+
 
