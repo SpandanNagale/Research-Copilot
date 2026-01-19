@@ -3,14 +3,13 @@ import logging
 from typing import List, Dict, Any
 
 # Import the unified LLM router
-from llm import get_llm_async
+from LLM import get_llm_async
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Summarizer_Engine")
 
 # --- PROMPT TEMPLATE ---
-# Forces the model to be concise and consistent.
 SUMMARY_PROMPT = """You are an expert academic synthesizer. 
 Summarize the following abstract into exactly three structured sections.
 Do not use conversational filler or introductory text.
@@ -24,48 +23,56 @@ Output format:
 **Result:** [1 sentence on the key metric or finding]
 """
 
-async def summarize_async(text: str, config: Dict[str, Any]) -> str:
+async def summarize_with_limit(
+    sem: asyncio.Semaphore, 
+    text: str, 
+    config: Dict[str, Any]
+) -> str:
     """
-    Summarizes a single abstract using the configured LLM (Gemini or Ollama).
+    Wraps the summarization logic with a Semaphore to prevent 
+    hitting the API Rate Limit (ResourceExhausted).
     """
-    # 1. Validation
-    if not text or len(text) < 50:
-        return "Abstract too short or missing."
+    async with sem:  # <--- Waits here if 3 requests are already active
+        try:
+            # 1. Validation
+            if not text or len(text) < 50:
+                return "Abstract too short or missing."
 
-    # 2. Construction
-    prompt = SUMMARY_PROMPT.format(text=text)
+            # 2. Construction
+            prompt = SUMMARY_PROMPT.format(text=text)
 
-    # 3. Execution
-    try:
-        # We pass the 'config' (provider, api_key, model) down to the LLM router
-        summary = await get_llm_async(prompt, config)
-        return summary
-        
-    except Exception as e:
-        logger.error(f"Summary failed for text snippet: {text[:30]}... Error: {e}")
-        return "Summary unavailable due to LLM error."
+            # 3. Execution
+            # We add a tiny artificial delay to ensure we don't burst strictly at the limit
+            # if the API is feeling sensitive.
+            await asyncio.sleep(0.5) 
+            
+            summary = await get_llm_async(prompt, config)
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Summary failed for text: {text[:20]}... Error: {e}")
+            return "Summary unavailable due to rate limit/error."
 
 async def batch_summary_async(abstracts: List[str], config: Dict[str, Any]) -> List[str]:
     """
-    Summarizes multiple abstracts IN PARALLEL.
-    
-    Args:
-        abstracts: List of abstract strings.
-        config: Dict containing {"provider": "...", "api_key": "...", "model": "..."}.
-        
-    Returns:
-        List of summary strings in the same order as input.
+    Summarizes abstracts with CONCURRENCY CONTROL.
     """
-    # Create a list of async tasks
-    tasks = [summarize_async(text, config) for text in abstracts]
+    # 1. SET THE LIMIT
+    # Gemini Free Tier allows ~15 RPM (Requests Per Minute).
+    # Setting concurrency to 3 ensures we don't flood the pipe.
+    # If you have a paid tier, you can bump this to 10 or 20.
+    limit = 3 
+    sem = asyncio.Semaphore(limit)
+
+    # 2. CREATE TASKS
+    tasks = [summarize_with_limit(sem, text, config) for text in abstracts]
     
-    # asyncio.gather runs them all simultaneously
-    # If using Gemini, 20 papers take ~3-4 seconds total.
+    # 3. RUN WITH PROGRESS LOGGING
+    # We use gather, but the Semaphore inside the function controls the speed.
     results = await asyncio.gather(*tasks)
     
     return results
 
 # --- SYNC WRAPPER ---
-# Use this only if you are calling from a legacy synchronous script.
 def batch_summary(abstracts: List[str], config: Dict[str, Any]) -> List[str]:
     return asyncio.run(batch_summary_async(abstracts, config))
