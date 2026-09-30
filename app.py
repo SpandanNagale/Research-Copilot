@@ -5,7 +5,7 @@ import streamlit as st
 from core.config import get_secret
 from core.export import to_bibtex, to_csv, to_json, to_ris
 from core.knowledge import KnowledgeBase, label_themes_tfidf
-from core.llm import PROVIDERS, LLMClient, LLMError, filter_free_openrouter, list_models
+from core.llm import DEFAULT_PROVIDER_ORDER, FallbackLLMClient, LLMError
 from core.rag import answer_stream
 from core.sources import search as source_search
 from core.sources import pdf as pdf_source
@@ -41,12 +41,10 @@ for key, default in {
 # --- sidebar -----------------------------------------------------------------
 with st.sidebar:
     st.header("Engine")
-
-    provider = st.selectbox("Provider", list(PROVIDERS.keys()), format_func=lambda p: p.replace("_", " ").title())
-    cfg = PROVIDERS[provider]
-
-    user_key = st.text_input("API key", type="password", help="Leave blank to use a saved server key, if any.")
-    server_key = get_secret(cfg["key_env"]) if cfg.get("key_env") else cfg.get("default_api_key")
+    st.caption(
+        "Tries " + " → ".join(p.replace("_", " ").title() for p in DEFAULT_PROVIDER_ORDER)
+        + " automatically, moving on if one fails."
+    )
 
     app_password = get_secret("APP_PASSWORD")
     server_keys_usable = True
@@ -56,55 +54,19 @@ with st.sidebar:
             st.session_state.authenticated = True
             st.rerun()
         server_keys_usable = False
+        st.warning("Enter the app password to use the configured LLM providers.")
 
-    if not user_key and server_key and server_keys_usable:
-        st.caption("Using saved key.")
-    elif not user_key and server_key and not server_keys_usable:
-        st.caption("A saved key exists but needs the app password above, or bring your own key.")
-    elif not user_key and not server_key:
-        st.warning("No API key available for this provider yet.")
-
-    base_url_override = None
-    if provider == "ollama_local":
-        base_url_override = st.text_input("Ollama base URL", value=cfg["base_url"])
-        st.caption("Only works when you run this app locally.")
-
-    free_only = False
-    if provider == "openrouter":
-        free_only = st.checkbox("Free models only")
-
-    key_for_listing = user_key or (server_key if server_keys_usable else None)
-
-    col_refresh, _ = st.columns([1, 3])
-    force_refresh = col_refresh.button("↻", help="Refresh model list")
-
-    try:
-        models = list_models(provider, api_key=key_for_listing, base_url=base_url_override, force=force_refresh)
-        if provider == "openrouter" and free_only:
-            free_ids = set(filter_free_openrouter(provider, base_url_override, key_for_listing))
-            models = [m for m in models if m in free_ids] or models
-    except Exception as exc:
-        models = [cfg["default_model"]]
-        st.caption(f"Couldn't fetch model list ({exc}); using default.")
-
-    models = models or [cfg["default_model"]]
-    if cfg["default_model"] in models:
-        # put the registry's recommended model first so a fresh session doesn't
-        # land on whatever the provider's API happens to list alphabetically
-        models = [cfg["default_model"]] + [m for m in models if m != cfg["default_model"]]
-    model = st.selectbox("Model", options=models, accept_new_options=True)
     temperature = st.slider("Temperature", 0.0, 1.5, 0.3, 0.05)
 
-    def _resolve_client() -> LLMClient | None:
-        key = user_key or (server_key if server_keys_usable else None)
-        if not key and provider != "ollama_local":
+    def _resolve_client() -> FallbackLLMClient | None:
+        if not server_keys_usable:
             return None
-        return LLMClient(provider=provider, model=model, api_key=key, base_url=base_url_override, temperature=temperature)
+        return FallbackLLMClient(temperature=temperature)
 
     if st.button("Test connection"):
         client = _resolve_client()
         if client is None:
-            st.error("No API key available.")
+            st.error("Enter the app password first.")
         else:
             ok, msg = client.test_connection()
             (st.success if ok else st.error)(msg)
@@ -239,7 +201,7 @@ else:
         if st.button("Summarize papers", help="On-demand: generates AI summaries for the papers below."):
             client = _resolve_client()
             if client is None:
-                st.error("No API key available for the selected provider.")
+                st.error("Enter the app password in the sidebar to use the LLM providers.")
             else:
                 progress = st.progress(0.0)
 
@@ -284,7 +246,7 @@ else:
         if st.button("Write review", type="primary"):
             client = _resolve_client()
             if client is None:
-                st.error("No API key available for the selected provider.")
+                st.error("Enter the app password in the sidebar to use the LLM providers.")
             else:
                 try:
                     with st.spinner("Writing literature review..."):
@@ -318,7 +280,7 @@ else:
         if question := st.chat_input("Ask about these papers..."):
             client = _resolve_client()
             if client is None:
-                st.error("No API key available for the selected provider.")
+                st.error("Enter the app password in the sidebar to use the LLM providers.")
             else:
                 st.session_state.messages.append({"role": "user", "content": question})
                 with st.chat_message("user"):

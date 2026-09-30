@@ -24,8 +24,9 @@ here as one app.
 - **Ask (RAG chat)** — streaming, grounded answers with sources numbered per paper, a theme
   filter, and short-follow-up query rewriting.
 - **Export** — CSV, BibTeX, RIS, JSON.
-- **Multi-provider LLM** — Groq, Gemini, OpenRouter, Ollama Cloud, and local Ollama, all through
-  one OpenAI-compatible client with live model listing, retries, and readable error messages.
+- **Multi-provider LLM, no picker** — tries Groq, then Gemini, OpenRouter, Ollama Cloud, and local
+  Ollama in order, moving to the next automatically on a bad key, rate limit, or connection
+  failure. One OpenAI-compatible client underneath, with retries and readable error messages.
 
 ## Architecture
 

@@ -315,3 +315,66 @@ class LLMClient:
             return True, "Connected."
         except LLMError as e:
             return False, str(e)
+
+
+DEFAULT_PROVIDER_ORDER = ["groq", "gemini", "openrouter", "ollama_cloud", "ollama_local"]
+
+
+class FallbackLLMClient:
+    """No provider picker: tries providers in order and moves to the next one
+    on any LLMError (bad/missing key, rate limit, model gone, connection
+    refused for a local Ollama that isn't running, etc.)."""
+
+    def __init__(self, order: list[str] | None = None, temperature: float = 0.3):
+        self.order = order or DEFAULT_PROVIDER_ORDER
+        self.temperature = temperature
+        self._clients = [LLMClient(provider=p, temperature=temperature) for p in self.order]
+        self._last_working: str | None = None
+
+    @property
+    def provider(self) -> str:
+        # for callers that size thread pools off PROVIDERS[client.provider] (e.g. synthesis.py)
+        return self._last_working or self.order[0]
+
+    def complete(self, prompt: str, system: str | None = None) -> str:
+        messages = ([{"role": "system", "content": system}] if system else []) + [
+            {"role": "user", "content": prompt}
+        ]
+        return self.chat(messages)
+
+    def chat(self, messages: list[dict]) -> str:
+        last_err: LLMError | None = None
+        for client in self._clients:
+            try:
+                result = client.chat(messages)
+                self._last_working = client.provider
+                return result
+            except LLMError as exc:
+                last_err = exc
+        raise last_err or LLMError("No LLM provider is configured.")
+
+    def stream(self, messages: list[dict]) -> Iterator[str]:
+        last_err: LLMError | None = None
+        for client in self._clients:
+            gen = client.stream(messages)
+            try:
+                first_chunk = next(gen)
+            except StopIteration:
+                self._last_working = client.provider
+                return
+            except LLMError as exc:
+                last_err = exc
+                continue
+            self._last_working = client.provider
+            yield first_chunk
+            yield from gen
+            return
+        raise last_err or LLMError("No LLM provider is configured.")
+
+    def test_connection(self) -> tuple[bool, str]:
+        for client in self._clients:
+            ok, msg = client.test_connection()
+            if ok:
+                self._last_working = client.provider
+                return True, f"Connected via {client.provider.replace('_', ' ').title()}."
+        return False, "All configured providers failed — check API keys in Data source keys / .env."
