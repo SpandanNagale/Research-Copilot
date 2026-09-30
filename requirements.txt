@@ -1,35 +1,16 @@
-arxiv
-langchain
-langchain_core
-langchain_community
-langchain_groq
-streamlit
-pandas
-tqdm
-sentence-transformers
-faiss-cpu
-numpy
-groq
-google-generativeai
-# --- Core UI & Data ---
-streamlit
-pandas
-numpy
-arxiv
-
-# --- AI & LLM (Gemini) ---
-google-generativeai>=0.5.0
-python-dotenv
+streamlit>=1.45
+openai
 tenacity
-
-# --- RAG & Embeddings ---
-sentence-transformers
-faiss-cpu
+requests
+arxiv>=2
+pypdf
+pandas
+numpy
 scikit-learn
+sentence-transformers
+plotly
+python-dotenv
+pytest
 
-# --- Legacy/VectorStore Support ---
-# Keep these ONLY if your 'vectorstore.py' relies on LangChain wrappers. 
-# If you wrote a custom FAISS implementation, delete these.
-langchain-community
-langchain-huggingface
-ollama
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
