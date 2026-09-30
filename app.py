@@ -5,7 +5,7 @@ import streamlit as st
 from core.config import get_secret
 from core.export import to_bibtex, to_csv, to_json, to_ris
 from core.knowledge import KnowledgeBase, label_themes_tfidf
-from core.llm import DEFAULT_PROVIDER_ORDER, FallbackLLMClient, LLMError
+from core.llm import DEFAULT_PROVIDER_ORDER, FallbackLLMClient, LLMError, display_name
 from core.rag import answer_stream
 from core.sources import search as source_search
 from core.sources import pdf as pdf_source
@@ -42,7 +42,7 @@ for key, default in {
 with st.sidebar:
     st.header("Engine")
     st.caption(
-        "Tries " + " → ".join(p.replace("_", " ").title() for p in DEFAULT_PROVIDER_ORDER)
+        "Tries " + " → ".join(display_name(p) for p in DEFAULT_PROVIDER_ORDER)
         + " automatically, moving on if one fails."
     )
 

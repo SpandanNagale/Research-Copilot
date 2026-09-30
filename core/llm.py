@@ -317,7 +317,19 @@ class LLMClient:
             return False, str(e)
 
 
-DEFAULT_PROVIDER_ORDER = ["ollama_cloud", "groq", "gemini", "openrouter", "ollama_local"]
+DEFAULT_PROVIDER_ORDER = ["ollama_cloud", "openrouter", "groq", "gemini", "ollama_local"]
+
+PROVIDER_DISPLAY_NAMES = {
+    "groq": "Groq",
+    "gemini": "Gemini",
+    "openrouter": "OpenRouter",
+    "ollama_cloud": "Ollama Cloud",
+    "ollama_local": "Ollama (local)",
+}
+
+
+def display_name(provider: str) -> str:
+    return PROVIDER_DISPLAY_NAMES.get(provider, provider.replace("_", " ").title())
 
 
 class FallbackLLMClient:
@@ -376,5 +388,5 @@ class FallbackLLMClient:
             ok, msg = client.test_connection()
             if ok:
                 self._last_working = client.provider
-                return True, f"Connected via {client.provider.replace('_', ' ').title()}."
+                return True, f"Connected via {display_name(client.provider)}."
         return False, "All configured providers failed — check API keys in Data source keys / .env."
