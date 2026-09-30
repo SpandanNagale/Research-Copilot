@@ -80,7 +80,7 @@ streamlit run app.py
 | `OLLAMA_API_KEY` | LLM (Ollama Cloud) | ollama.com |
 | `OPENALEX_API_KEY` | Data source (required since Feb 2026) | openalex.org |
 | `NCBI_API_KEY` + `NCBI_EMAIL` | Data source (PubMed, optional but raises rate limits) | ncbi.nlm.nih.gov/account |
-| `SEMANTIC_SCHOLAR_API_KEY` | Data source (optional, raises rate limits) | semanticscholar.org/product/api |
+| `SEMANTIC_SCHOLAR_API_KEY` | Data source (optional, raises the unkeyed rate limit; even with a key it's capped at 1 request/sec, cumulative across all endpoints) | semanticscholar.org/product/api |
 | `APP_PASSWORD` | Gates saved server-side keys on a public deployment | set your own |
 
 None of these are required to start the app — visitors without keys can bring their own from the
