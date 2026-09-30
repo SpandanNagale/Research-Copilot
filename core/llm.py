@@ -317,7 +317,7 @@ class LLMClient:
             return False, str(e)
 
 
-DEFAULT_PROVIDER_ORDER = ["groq", "gemini", "openrouter", "ollama_cloud", "ollama_local"]
+DEFAULT_PROVIDER_ORDER = ["ollama_cloud", "groq", "gemini", "openrouter", "ollama_local"]
 
 
 class FallbackLLMClient:
