@@ -87,7 +87,12 @@ with st.sidebar:
         models = [cfg["default_model"]]
         st.caption(f"Couldn't fetch model list ({exc}); using default.")
 
-    model = st.selectbox("Model", options=models or [cfg["default_model"]], accept_new_options=True)
+    models = models or [cfg["default_model"]]
+    if cfg["default_model"] in models:
+        # put the registry's recommended model first so a fresh session doesn't
+        # land on whatever the provider's API happens to list alphabetically
+        models = [cfg["default_model"]] + [m for m in models if m != cfg["default_model"]]
+    model = st.selectbox("Model", options=models, accept_new_options=True)
     temperature = st.slider("Temperature", 0.0, 1.5, 0.3, 0.05)
 
     def _resolve_client() -> LLMClient | None:
